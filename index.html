@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Weather Radar & Alerts</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #111; }
+        
+        /* Map Container */
+        #map { height: 100vh; width: 100%; background: #1a1a1a; }
+        
+        /* HUD Controls */
+        .hud-panel {
+            position: absolute;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: 1px solid #444;
+            backdrop-filter: blur(4px);
+        }
+
+        /* Playback Controls (Bottom Center) */
+        #controls {
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            min-width: 250px;
+            justify-content: center;
+        }
+
+        /* Legend (Top Right) */
+        #legend {
+            top: 20px;
+            right: 20px;
+            font-size: 13px;
+        }
+
+        /* Buttons */
+        button {
+            background: #007bff;
+            border: none;
+            color: white;
+            padding: 8px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            transition: background 0.2s;
+        }
+        button:hover { background: #0056b3; }
+        button:active { transform: translateY(1px); }
+
+        /* Status Text */
+        #timestamp { font-family: monospace; font-size: 14px; color: #00ffcc; }
+        
+        /* Legend Items */
+        .legend-row { display: flex; align-items: center; margin-top: 5px; }
+        .color-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+        .loading-indicator { color: #aaa; font-size: 11px; margin-top: 5px; text-align: right;}
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div id="legend" class="hud-panel">
+        <div style="font-weight:bold; margin-bottom:5px; border-bottom:1px solid #555; padding-bottom:5px;">Active Alerts</div>
+        <div class="legend-row"><div class="color-dot" style="background: #ff0000;"></div> Tornado Warning</div>
+        <div class="legend-row"><div class="color-dot" style="background: #ff00ff;"></div> Flash Flood Warning</div>
+        <div class="legend-row"><div class="color-dot" style="background: #ffa500;"></div> Svr Thunderstorm</div>
+        <div class="legend-row">
+            <label for="spotterToggle" style="display: flex; align-items: center; cursor: pointer;">
+                <input type="checkbox" id="spotterToggle" checked style="margin-right: 8px;">
+                <div class="color-dot" style="background: #ff0000;"></div> Storm Spotter
+            </label>
+        </div>
+        <div id="alert-status" class="loading-indicator">Updating alerts...</div>
+        <div id="spotter-status" class="loading-indicator">Updating spotters...</div>
+    </div>
+
+    <div id="controls" class="hud-panel">
+        <button id="playPauseBtn">Pause</button>
+        <div style="display:flex; flex-direction:column; align-items:center;">
+            <span style="font-size:10px; color:#aaa;">RADAR TIME</span>
+            <span id="timestamp">Loading...</span>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <script>
+        // --- CONFIGURATION ---
+        const RADAR_WMS_URL = "https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows";
+        // Combining your 3 requested alerts into one NWS API call
+        const ALERTS_API_URL = "https://api.weather.gov/alerts/active?status=actual&message_type=alert&event=Tornado%20Warning,Flash%20Flood%20Warning,Severe%20Thunderstorm%20Warning";
+        // --- Spotter Network Configuration ---
+        const SPOTTER_API_URL = "https://www.spotternetwork.org/positions";
+        const SPOTTER_APP_ID = "55f78b6ed31f5"; // The App ID you provided
+        
+        // --- MAP SETUP ---
+        const map = L.map('map', {
+            zoomControl: false // moved to custom location if needed, or default
+        }).setView([39.8283, -98.5795], 4); // Center of USA
+
+        L.control.zoom({ position: 'topleft' }).addTo(map);
+
+        // Dark Base Map (CartoDB Dark Matter - Free) - Better for Radar visibility
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            subdomains: 'abcd',
+            maxZoom: 19
+        }).addTo(map);
+
+        // --- RADAR ANIMATION LOGIC ---
+        let radarLayers = [];
+        let currentFrame = 0;
+        let isPlaying = true;
+        let animationTimer = null;
+
+        // Helper: Get ISO Strings for the last 40 minutes (in 5 min intervals)
+        function getRadarTimestamps() {
+            const dates = [];
+            const now = new Date();
+            // Round down to nearest 5 minutes
+            const coeff = 1000 * 60 * 5;
+            const roundedEnd = new Date(Math.floor(now.getTime() / coeff) * coeff);
+            
+            // NOAA Radar usually has a slight delay, start 5 mins back from "now"
+            // Generate 8 frames (40 mins of data)
+            for (let i = 7; i >= 0; i--) {
+                const t = new Date(roundedEnd.getTime() - (i * 5 * 60000) - (5 * 60000)); 
+                dates.push(t.toISOString());
+            }
+            return dates;
+        }
+
+        function initRadar() {
+            // Remove old layers
+            radarLayers.forEach(l => map.removeLayer(l));
+            radarLayers = [];
+            
+            const timeStamps = getRadarTimestamps();
+
+            timeStamps.forEach((time, index) => {
+                const layer = L.tileLayer.wms(RADAR_WMS_URL, {
+                    layers: 'conus_bref_qcd',
+                    format: 'image/png',
+                    transparent: true,
+                    version: '1.3.0',
+                    time: time,
+                    opacity: 0, // Start invisible
+                    zIndex: 10 // Radar above base map
+                });
+                
+                layer.wmsParams.customTime = time; // Store time for display
+                layer.addTo(map);
+                radarLayers.push(layer);
+            });
+
+            // Reset animation index if it exceeds new array length
+            if(currentFrame >= radarLayers.length) currentFrame = 0;
+        }
+
+        function animateRadar() {
+            if (!radarLayers.length) return;
+
+            // Hide all layers
+            radarLayers.forEach(l => l.setOpacity(0));
+
+            // Show current layer
+            const activeLayer = radarLayers[currentFrame];
+            activeLayer.setOpacity(0.8);
+
+            // Update Timestamp Text
+            const date = new Date(activeLayer.wmsParams.customTime);
+            document.getElementById('timestamp').innerText = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', timeZoneName:'short'});
+
+            // Increment frame
+            currentFrame = (currentFrame + 1) % radarLayers.length;
+        }
+
+        // Start Animation Loop
+        function startAnimation() {
+            if(animationTimer) clearInterval(animationTimer);
+            animationTimer = setInterval(() => {
+                if (isPlaying) animateRadar();
+            }, 800); // 800ms per frame
+        }
+
+        // --- ALERTS LOGIC ---
+        let alertsLayerGroup = L.layerGroup().addTo(map);
+
+        async function fetchAlerts() {
+            document.getElementById('alert-status').innerText = "Refreshing...";
+            try {
+                // NWS API requires a User-Agent
+                const response = await fetch(ALERTS_API_URL, {
+                    headers: { 'User-Agent': '(weather-radar-app, contact@localhost)' }
+                });
+                
+                if (!response.ok) throw new Error('Network response was not ok');
+                
+                const data = await response.json();
+                
+                alertsLayerGroup.clearLayers(); // Clear old alerts
+
+                L.geoJSON(data, {
+                    style: function(feature) {
+                        const eventType = feature.properties.event;
+                        let color = '#gray';
+                        if (eventType.includes('Tornado')) color = '#ff0000';
+                        else if (eventType.includes('Flash Flood')) color = '#ff00ff';
+                        else if (eventType.includes('Thunderstorm')) color = '#ffa500';
+                        
+                        return {
+                            color: color,
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.15
+                        };
+                    },
+                    onEachFeature: function(feature, layer) {
+                        // Tooltip on hover
+                        layer.bindTooltip(`<strong>${feature.properties.event}</strong>`, {permanent: false, direction: "center"});
+                        // Popup on click
+                        layer.bindPopup(`
+                            <div style="font-size:14px;">
+                                <strong>${feature.properties.event}</strong><br>
+                                <hr style="margin:5px 0; border:0; border-top:1px solid #ccc;">
+                                <small>Expires: ${new Date(feature.properties.expires).toLocaleTimeString()}</small><br><br>
+                                ${feature.properties.headline}
+                            </div>
+                        `);
+                    }
+                }).addTo(alertsLayerGroup);
+
+                document.getElementById('alert-status').innerText = `Active: ${data.features.length}`;
+
+            } catch (error) {
+                console.error("Alert fetch error:", error);
+                document.getElementById('alert-status').innerText = "Error fetching alerts";
+            }
+        }
+
+        // --- SPOTTER NETWORK LOGIC ---
+        let spotterLayerGroup = L.layerGroup().addTo(map);
+        
+        async function fetchSpotters() {
+            document.getElementById('spotter-status').innerText = "Refreshing...";
+            try {
+                const response = await fetch(SPOTTER_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 'id': SPOTTER_APP_ID })
+                });
+
+                if (!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
+
+                const data = await response.json();
+                spotterLayerGroup.clearLayers(); // Clear old spotter markers
+
+                if (data.positions && data.positions.length > 0) {
+                    data.positions.forEach(spotter => {
+                        L.circleMarker([spotter.lat, spotter.lon], {
+                            radius: 6,
+                            color: '#ff0000', // Red outline
+                            fillColor: '#ff0000', // Red fill
+                            fillOpacity: 0.8,
+                            weight: 1
+                          })
+                          .bindPopup(`
+                              <strong>${spotter.first} ${spotter.last} (${spotter.callsign || 'N/A'})</strong><br>
+                              <hr style="margin:5px 0; border:0; border-top:1px solid #ccc;">
+                              Reported: ${new Date(spotter.report_at + ' UTC').toLocaleTimeString()}
+                          `)
+                          .addTo(spotterLayerGroup);
+                    });
+                }
+                document.getElementById('spotter-status').innerText = `Active Spotters: ${data.positions.length}`;
+
+            } catch (error) {
+                console.error("Spotter Network fetch error:", error);
+                document.getElementById('spotter-status').innerText = "Error fetching spotters";
+            }
+        }
+
+        // --- TOGGLE LOGIC ---
+        const spotterToggle = document.getElementById('spotterToggle');
+        spotterToggle.addEventListener('change', function() {
+            if (this.checked) {
+                map.addLayer(spotterLayerGroup);
+            } else {
+                map.removeLayer(spotterLayerGroup);
+            }
+        });
+
+
+        // --- CONTROLS & AUTO UPDATE ---
+        
+        const playBtn = document.getElementById('playPauseBtn');
+        playBtn.addEventListener('click', () => {
+            isPlaying = !isPlaying;
+            playBtn.innerText = isPlaying ? "Pause" : "Play";
+            // If paused, verify current frame is visible
+            if(!isPlaying && radarLayers.length > 0) {
+                // Keep the current frame visible (logic handled in animation loop essentially)
+            }
+        });
+
+        // Initialize
+        initRadar();
+        startAnimation();
+        fetchAlerts();
+        fetchSpotters();
+
+        // Auto-Update Timers
+        // Radar: Refresh layers every 5 minutes to get new WMS timestamps
+        setInterval(() => {
+            initRadar();
+            console.log("Radar sequence updated");
+        }, 300000);
+
+        // Alerts: Refresh every 60 seconds
+        setInterval(fetchAlerts, 60000);
+        
+        // Spotters: Refresh every 60 seconds
+        setInterval(fetchSpotters, 60000);
+
+    </script>
+</body>
+</html>
