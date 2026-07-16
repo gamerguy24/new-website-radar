@@ -146,6 +146,21 @@
         #radar-legend { bottom: 26px; left: 16px; }
         #radar-legend .site { font-weight: 700; color: var(--accent); }
         .radar-title { font-size: 12.5px; margin-bottom: 9px; }
+
+        /* Site picker */
+        #siteSelect {
+            width: 100%; max-width: 260px; margin-bottom: 11px;
+            background: rgba(255,255,255,0.06); color: var(--text);
+            border: 1px solid var(--border); border-radius: 9px;
+            padding: 8px 30px 8px 11px; font-size: 12.5px; font-family: var(--font);
+            cursor: pointer; -webkit-appearance: none; appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%238b95a6' stroke-width='1.6'/></svg>");
+            background-repeat: no-repeat; background-position: right 10px center;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        #siteSelect:hover { border-color: rgba(46,230,198,0.5); }
+        #siteSelect:focus { outline: none; border-color: var(--accent); }
+        #siteSelect option { background: #12161d; color: var(--text); }
         .dbz-bar {
             display: flex; height: 10px; width: 230px; border-radius: 6px; overflow: hidden;
             box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
@@ -212,6 +227,7 @@
 
     <div id="radar-legend" class="hud-panel">
         <div class="radar-title">NEXRAD Level II &mdash; <span id="radar-site" class="site">&hellip;</span></div>
+        <select id="siteSelect" aria-label="Radar site"></select>
         <div class="dbz-bar" id="dbz-bar"></div>
         <div class="dbz-labels"><span>5</span><span>20</span><span>35</span><span>50</span><span>65+</span></div>
         <div class="dbz-unit">Reflectivity (dBZ)</div>
@@ -264,8 +280,50 @@
         let isPlaying = true;
         let animationTimer = null;
         let activeSite = RADAR_SITE;
+        let currentSite = RADAR_SITE;   // site the user has selected (mutable)
+        let userPicked = new URLSearchParams(location.search).has('site'); // explicit pick -> no auto-fallback
 
         function radarStatus(msg) { document.getElementById('radar-status').innerText = msg; }
+
+        // --- NEXRAD (WSR-88D) SITE LIST for the picker ---
+        const SITES = [
+            ["KABR","Aberdeen, SD"],["KENX","Albany, NY"],["KABX","Albuquerque, NM"],["KAMA","Amarillo, TX"],
+            ["KFFC","Atlanta, GA"],["KEWX","Austin/San Antonio, TX"],["KBBX","Beale AFB, CA"],["KBGM","Binghamton, NY"],
+            ["KBLX","Billings, MT"],["KBMX","Birmingham, AL"],["KBIS","Bismarck, ND"],["KCBX","Boise, ID"],
+            ["KBOX","Boston, MA"],["KBRO","Brownsville, TX"],["KBUF","Buffalo, NY"],["KCXX","Burlington, VT"],
+            ["KFDX","Cannon AFB, NM"],["KICX","Cedar City, UT"],["KGRK","Central Texas (Ft Hood)"],["KCLX","Charleston, SC"],
+            ["KRLX","Charleston, WV"],["KCAE","Columbia, SC"],["KCYS","Cheyenne, WY"],["KLOT","Chicago, IL"],
+            ["KILN","Cincinnati, OH"],["KCLE","Cleveland, OH"],["KGWX","Columbus AFB, MS"],["KCRP","Corpus Christi, TX"],
+            ["KFWS","Dallas/Ft Worth, TX"],["KFTG","Denver, CO"],["KDMX","Des Moines, IA"],["KDTX","Detroit, MI"],
+            ["KDDC","Dodge City, KS"],["KDOX","Dover AFB, DE"],["KDLH","Duluth, MN"],["KDYX","Dyess AFB, TX"],
+            ["KEYX","Edwards AFB, CA"],["KEPZ","El Paso, TX"],["KLRX","Elko, NV"],["KBHX","Eureka, CA"],
+            ["KVWX","Evansville, IN"],["KFSX","Flagstaff, AZ"],["KFDR","Frederick, OK"],["KAPX","Gaylord, MI"],
+            ["KGGW","Glasgow, MT"],["KGLD","Goodland, KS"],["KMVX","Grand Forks, ND"],["KGJX","Grand Junction, CO"],
+            ["KGRR","Grand Rapids, MI"],["KTFX","Great Falls, MT"],["KGRB","Green Bay, WI"],["KGSP","Greer, SC"],
+            ["KUEX","Hastings, NE"],["KHDX","Holloman AFB, NM"],["KHGX","Houston/Galveston, TX"],["KHTX","Huntsville, AL"],
+            ["KIND","Indianapolis, IN"],["KJKL","Jackson, KY"],["KDGX","Jackson, MS"],["KJAX","Jacksonville, FL"],
+            ["KEAX","Kansas City, MO"],["KBYX","Key West, FL"],["KMRX","Knoxville, TN"],["KARX","La Crosse, WI"],
+            ["KLCH","Lake Charles, LA"],["KESX","Las Vegas, NV"],["KDFX","Laughlin AFB, TX"],["KILX","Lincoln, IL"],
+            ["KLZK","Little Rock, AR"],["KVTX","Los Angeles, CA"],["KLVX","Louisville, KY"],["KLBB","Lubbock, TX"],
+            ["KMQT","Marquette, MI"],["KMXX","Maxwell AFB, AL"],["KMLB","Melbourne, FL"],["KNQA","Memphis, TN"],
+            ["KAMX","Miami, FL"],["KMAF","Midland/Odessa, TX"],["KMKX","Milwaukee, WI"],["KMPX","Minneapolis, MN"],
+            ["KMBX","Minot AFB, ND"],["KMSX","Missoula, MT"],["KMOB","Mobile, AL"],["KVAX","Moody AFB, GA"],
+            ["KMHX","Morehead City, NC"],["KOHX","Nashville, TN"],["KLIX","New Orleans, LA"],["KOKX","New York City, NY"],
+            ["KAKQ","Norfolk/Richmond, VA"],["KLNX","North Platte, NE"],["KTLX","Oklahoma City, OK"],["KOAX","Omaha, NE"],
+            ["KPAH","Paducah, KY"],["KPDT","Pendleton, OR"],["KDIX","Philadelphia, PA"],["KIWA","Phoenix, AZ"],
+            ["KPBZ","Pittsburgh, PA"],["KGYX","Portland, ME"],["KRTX","Portland, OR"],["KPUX","Pueblo, CO"],
+            ["KRAX","Raleigh/Durham, NC"],["KUDX","Rapid City, SD"],["KRGX","Reno, NV"],["KRIW","Riverton, WY"],
+            ["KFCX","Roanoke, VA"],["KDAX","Sacramento, CA"],["KMTX","Salt Lake City, UT"],
+            ["KSJT","San Angelo, TX"],["KNKX","San Diego, CA"],["KMUX","San Francisco, CA"],["KHNX","San Joaquin Valley, CA"],
+            ["KSOX","Santa Ana Mtns, CA"],["KATX","Seattle/Tacoma, WA"],["KSHV","Shreveport, LA"],["KFSD","Sioux Falls, SD"],
+            ["KOTX","Spokane, WA"],["KSGF","Springfield, MO"],["KCCX","State College, PA"],["KLSX","St. Louis, MO"],
+            ["KTLH","Tallahassee, FL"],["KTBW","Tampa, FL"],["KTWX","Topeka, KS"],["KINX","Tulsa, OK"],
+            ["KVNX","Vance AFB, OK"],["KICT","Wichita, KS"],["KLTX","Wilmington, NC"],["KYUX","Yuma, AZ"],
+            ["KMAX","Medford, OR"],["KEMX","Tucson, AZ"],["KFTG","Denver, CO"],["KGRK","Ft Hood, TX"],
+            ["PGUA","Andersen AFB, Guam"],["PHKI","Kauai, HI"],["PHKM","Kohala, HI"],["PHMO","Molokai, HI"],
+            ["PHWA","South Shore, HI"],["TJUA","San Juan, PR"],["PABC","Bethel, AK"],["PAPD","Fairbanks, AK"],
+            ["PAHG","Anchorage, AK"],["PACG","Sitka, AK"]
+        ];
 
         // NWS-style reflectivity color scale: [dBZ threshold, color]
         const DBZ_STOPS = [
@@ -289,6 +347,33 @@
                 const d = document.createElement('div');
                 d.style.background = c;
                 bar.appendChild(d);
+            });
+        })();
+
+        // Build the site picker dropdown
+        (function buildSiteSelect() {
+            const sel = document.getElementById('siteSelect');
+            const seen = new Set();
+            const sorted = [...SITES].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+            for (const [id, name] of sorted) {
+                if (seen.has(id)) continue; // dedupe
+                seen.add(id);
+                const o = document.createElement('option');
+                o.value = id;
+                o.textContent = `${id} — ${name}`;
+                sel.appendChild(o);
+            }
+            if (!seen.has(currentSite)) { // ensure current site is present/selectable
+                const o = document.createElement('option');
+                o.value = currentSite;
+                o.textContent = currentSite;
+                sel.insertBefore(o, sel.firstChild);
+            }
+            sel.value = currentSite;
+            sel.addEventListener('change', () => {
+                currentSite = sel.value;
+                userPicked = true;
+                loadRadar();
             });
         })();
 
@@ -336,9 +421,9 @@
             return keys;
         }
 
-        // Pick the first site (primary then fallbacks) that has recent data.
-        async function resolveSite() {
-            for (const site of [RADAR_SITE, ...RADAR_FALLBACKS]) {
+        // Pick the first candidate site that has recent data.
+        async function resolveSite(candidates) {
+            for (const site of candidates) {
                 const keys = await listSiteKeys(site);
                 if (keys.length) {
                     const newest = keyTime(keys[keys.length - 1]);
@@ -348,26 +433,150 @@
             return null;
         }
 
-        // Decode one Level II volume and paint its lowest reflectivity sweep to a
-        // canvas, returning an imageOverlay + timestamp + site location.
+        // --- WEB WORKER ---------------------------------------------------------
+        // Decoding (bzip2 + Level II parse) and canvas rasterizing are CPU-heavy and
+        // synchronous. Running them on the main thread froze the UI (no panning while
+        // loading). We offload both to a worker with OffscreenCanvas so the map stays
+        // fully interactive; the worker returns a PNG Blob we drop into an imageOverlay.
+        const WORKER_SRC = `
+            import { Level2Radar } from "https://esm.sh/nexrad-level-2-data@2.4.3";
+            import { Buffer } from "https://esm.sh/node/buffer.mjs";
+            const DBZ_STOPS = ${JSON.stringify(DBZ_STOPS)};
+            function dbzBucket(d){ if(d < DBZ_STOPS[0][0]) return -1; let idx=0; for(let i=0;i<DBZ_STOPS.length;i++){ if(d>=DBZ_STOPS[i][0]) idx=i; else break; } return idx; }
+            function mercY(latDeg){ const r=latDeg*Math.PI/180; return Math.log(Math.tan(Math.PI/4 + r/2)); }
+            ${'' /* Inverse (destination-driven) rasterizer: for each pixel we solve
+                     back to polar (range, azimuth) and look up the gate. Cost is fixed
+                     at ~W*H regardless of storm density, unlike drawing one polygon per
+                     echo gate (which stalled for ~45s on dense sites like KINX). */}
+            async function renderSweep(azArr, refArr, vol){
+                const siteLat=vol.latitude, siteLon=vol.longitude, cosLat=Math.cos(siteLat*Math.PI/180), KM=111.32;
+                const b0=refArr.find(b=>b&&b.moment_data);
+                const rangeKm=b0.first_gate + b0.gate_count*b0.gate_size;
+                const latPad=rangeKm/KM, lonPad=rangeKm/(KM*cosLat);
+                const north=siteLat+latPad, south=siteLat-latPad, west=siteLon-lonPad, east=siteLon+lonPad;
+                const W=1400, H=1400, canvas=new OffscreenCanvas(W,H), ctx=canvas.getContext('2d');
+                const mN=mercY(north), mS=mercY(south);
+
+                // azimuth (0.1 deg bins) -> radial index; each radial spans ~0.5 deg
+                const BINS=3600, binRadial=new Int16Array(BINS).fill(-1);
+                for(let i=0;i<azArr.length;i++){
+                    const b=refArr[i]; if(!b||!b.moment_data) continue;
+                    const s=Math.round((azArr[i]-0.25)*10), e2=Math.round((azArr[i]+0.25)*10);
+                    for(let k=s;k<e2;k++){ let idx=k%BINS; if(idx<0) idx+=BINS; binRadial[idx]=i; }
+                }
+                // lat depends only on row, lon only on column -> precompute offsets in km
+                const dxKm=new Float64Array(W), dyKm=new Float64Array(H);
+                for(let x=0;x<W;x++){ const lon=west+((x+0.5)/W)*(east-west); dxKm[x]=(lon-siteLon)*KM*cosLat; }
+                for(let y=0;y<H;y++){ const m=mN-((y+0.5)/H)*(mN-mS); const lat=(2*Math.atan(Math.exp(m))-Math.PI/2)*180/Math.PI; dyKm[y]=(lat-siteLat)*KM; }
+
+                const colors=DBZ_STOPS.map(function(s){ const h=s[1]; const r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b2=parseInt(h.slice(5,7),16); return ((255<<24)|(b2<<16)|(g<<8)|r)>>>0; });
+                const img=ctx.createImageData(W,H);
+                const buf=new Uint32Array(img.data.buffer);
+                const maxR2=rangeKm*rangeKm, RAD=180/Math.PI;
+                for(let y=0;y<H;y++){
+                    const dy=dyKm[y], row=y*W;
+                    for(let x=0;x<W;x++){
+                        const dx=dxKm[x], r2=dx*dx+dy*dy;
+                        if(r2>maxR2) continue;
+                        let az=Math.atan2(dx,dy)*RAD; if(az<0) az+=360;
+                        const ri=binRadial[Math.floor(az*10)%BINS];
+                        if(ri<0) continue;
+                        const b=refArr[ri], md=b.moment_data;
+                        const g=Math.floor((Math.sqrt(r2)-b.first_gate)/b.gate_size);
+                        if(g<0||g>=md.length) continue;
+                        const dbz=md[g];
+                        if(dbz==null) continue;
+                        const bi=dbzBucket(dbz);
+                        if(bi<0) continue;
+                        buf[row+x]=colors[bi];
+                    }
+                }
+                ctx.putImageData(img,0,0);
+                const blob=await canvas.convertToBlob({type:'image/png'});
+                return { blob, bounds:[[south,west],[north,east]], siteLat, siteLon };
+            }
+            self.onmessage = async (e) => {
+                const msg = e.data;
+                if (msg.ping) { self.postMessage({ type:'pong', ok: (typeof OffscreenCanvas !== 'undefined') }); return; }
+                try {
+                    const radar = new Level2Radar(Buffer.from(new Uint8Array(msg.buffer)));
+                    const elevs = radar.listElevations();
+                    radar.setElevation(elevs[0]);
+                    const az = radar.getAzimuth();
+                    const ref = radar.getHighresReflectivity();
+                    const vol = radar.data[elevs[0]][0].record.volume;
+                    const r = await renderSweep(az, ref, vol);
+                    self.postMessage({ type:'frame', id: msg.id, ok:true, blob:r.blob, bounds:r.bounds, siteLat:r.siteLat, siteLon:r.siteLon });
+                } catch (err) {
+                    self.postMessage({ type:'frame', id: msg.id, ok:false, error: (err && err.message) || String(err) });
+                }
+            };
+        `;
+
+        let radarWorker = null;
+        let workerReqId = 0;
+        const workerPending = new Map();
+        const workerReady = (function setupWorker() {
+            return new Promise((resolve) => {
+                let settled = false;
+                const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+                try {
+                    const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' }));
+                    radarWorker = new Worker(url, { type: 'module' });
+                    radarWorker.onmessage = (e) => {
+                        const d = e.data;
+                        if (d.type === 'pong') { done(!!d.ok); return; }
+                        const p = workerPending.get(d.id);
+                        if (!p) return;
+                        workerPending.delete(d.id);
+                        d.ok ? p.resolve(d) : p.reject(new Error(d.error));
+                    };
+                    radarWorker.onerror = (err) => { console.error('radar worker error:', err.message || err); done(false); };
+                    radarWorker.postMessage({ ping: true });
+                    setTimeout(() => done(false), 15000); // fall back if worker never warms up
+                } catch (e) { console.error('worker setup failed:', e); done(false); }
+            });
+        })();
+
+        function decodeInWorker(buffer) {
+            return new Promise((resolve, reject) => {
+                const id = ++workerReqId;
+                workerPending.set(id, { resolve, reject });
+                radarWorker.postMessage({ id, buffer }, [buffer]); // transfer buffer (no copy)
+            });
+        }
+
+        // Decode one Level II volume -> imageOverlay. Uses the worker when available,
+        // otherwise falls back to a main-thread render (with a yield to reduce jank).
         async function loadFrame(key) {
             const ab = await (await fetch(`${S3_BASE}/${key}`)).arrayBuffer();
-            const radar = new Level2Radar(Buffer.from(new Uint8Array(ab)));
+            let bounds, siteLat, siteLon, url;
 
-            const elevs = radar.listElevations();       // e.g. [1,2,3,...]
-            radar.setElevation(elevs[0]);               // lowest tilt (~0.5 deg)
-            const az = radar.getAzimuth();              // 720 azimuths
-            const ref = radar.getHighresReflectivity(); // 720 reflectivity blocks
-            const vol = radar.data[elevs[0]][0].record.volume; // site lat/lon in VOL block
+            if (await workerReady) {
+                const r = await decodeInWorker(ab);
+                bounds = r.bounds; siteLat = r.siteLat; siteLon = r.siteLon;
+                url = URL.createObjectURL(r.blob);
+            } else {
+                const radar = new Level2Radar(Buffer.from(new Uint8Array(ab)));
+                const elevs = radar.listElevations();
+                radar.setElevation(elevs[0]);
+                const az = radar.getAzimuth();
+                const ref = radar.getHighresReflectivity();
+                const vol = radar.data[elevs[0]][0].record.volume;
+                const out = renderSweep(az, ref, vol);
+                bounds = out.bounds; siteLat = vol.latitude; siteLon = vol.longitude;
+                url = out.canvas.toDataURL();
+                await new Promise(r => setTimeout(r, 0)); // let the UI breathe
+            }
 
-            const { canvas, bounds } = renderSweep(az, ref, vol);
-            const overlay = L.imageOverlay(canvas.toDataURL(), bounds, {
-                opacity: 0, zIndex: 200, interactive: false
-            }).addTo(map);
-            return { overlay, time: keyTime(key), siteLat: vol.latitude, siteLon: vol.longitude };
+            const overlay = L.imageOverlay(url, bounds, { opacity: 0, zIndex: 200, interactive: false }).addTo(map);
+            overlay._objUrl = url;
+            return { overlay, time: keyTime(key), siteLat, siteLon };
         }
 
         // Convert a polar sweep to a Mercator-aligned canvas image.
+        // Mirrors the worker's rasterizer (kept in sync by hand); only used as a
+        // fallback when Web Workers / OffscreenCanvas are unavailable.
         function renderSweep(azArr, refArr, vol) {
             const siteLat = vol.latitude, siteLon = vol.longitude;
             const cosLat = Math.cos(siteLat * Math.PI / 180);
@@ -388,94 +597,113 @@
             const ctx = canvas.getContext('2d');
             const mN = mercY(north), mS = mercY(south);
 
-            function gatePx(rKm, azDeg) {
-                const a = azDeg * Math.PI / 180;
-                const lat = siteLat + (rKm * Math.cos(a)) / KM_PER_DEG;
-                const lon = siteLon + (rKm * Math.sin(a)) / (KM_PER_DEG * cosLat);
-                const x = (lon - west) / (east - west) * W;
-                const y = (mN - mercY(lat)) / (mN - mS) * H;
-                return [x, y];
-            }
-
-            // Accumulate gates into one Path2D per color to minimize fill calls.
-            const paths = DBZ_STOPS.map(() => new Path2D());
-            for (let i = 0; i < refArr.length; i++) {
+            // azimuth (0.1 deg bins) -> radial index; each radial spans ~0.5 deg
+            const BINS = 3600, binRadial = new Int16Array(BINS).fill(-1);
+            for (let i = 0; i < azArr.length; i++) {
                 const b = refArr[i];
                 if (!b || !b.moment_data) continue;
-                const az = azArr[i], a0 = az - 0.25, a1 = az + 0.25;
-                // moment_data is already decoded: dBZ value, or null (below
-                // threshold / range folded) per the library.
-                const md = b.moment_data, fg = b.first_gate, gs = b.gate_size;
-                for (let g = 0; g < md.length; g++) {
+                const s = Math.round((azArr[i] - 0.25) * 10), e2 = Math.round((azArr[i] + 0.25) * 10);
+                for (let k = s; k < e2; k++) { let idx = k % BINS; if (idx < 0) idx += BINS; binRadial[idx] = i; }
+            }
+            // lat depends only on row, lon only on column -> precompute offsets in km
+            const dxKm = new Float64Array(W), dyKm = new Float64Array(H);
+            for (let x = 0; x < W; x++) { const lon = west + ((x + 0.5) / W) * (east - west); dxKm[x] = (lon - siteLon) * KM_PER_DEG * cosLat; }
+            for (let y = 0; y < H; y++) { const m = mN - ((y + 0.5) / H) * (mN - mS); const lat = (2 * Math.atan(Math.exp(m)) - Math.PI / 2) * 180 / Math.PI; dyKm[y] = (lat - siteLat) * KM_PER_DEG; }
+
+            const colors = DBZ_STOPS.map(([, h]) => {
+                const r = parseInt(h.slice(1, 3), 16), g = parseInt(h.slice(3, 5), 16), b2 = parseInt(h.slice(5, 7), 16);
+                return ((255 << 24) | (b2 << 16) | (g << 8) | r) >>> 0;
+            });
+            const img = ctx.createImageData(W, H);
+            const buf = new Uint32Array(img.data.buffer);
+            const maxR2 = rangeKm * rangeKm, RAD = 180 / Math.PI;
+            for (let y = 0; y < H; y++) {
+                const dy = dyKm[y], row = y * W;
+                for (let x = 0; x < W; x++) {
+                    const dx = dxKm[x], r2 = dx * dx + dy * dy;
+                    if (r2 > maxR2) continue;
+                    let az = Math.atan2(dx, dy) * RAD; if (az < 0) az += 360;
+                    const ri = binRadial[Math.floor(az * 10) % BINS];
+                    if (ri < 0) continue;
+                    const b = refArr[ri], md = b.moment_data;
+                    const g = Math.floor((Math.sqrt(r2) - b.first_gate) / b.gate_size);
+                    if (g < 0 || g >= md.length) continue;
                     const dbz = md[g];
                     if (dbz == null) continue;
                     const bi = dbzBucket(dbz);
                     if (bi < 0) continue;
-                    const rI = fg + g * gs, rO = rI + gs;
-                    const [x1, y1] = gatePx(rI, a0);
-                    const [x2, y2] = gatePx(rO, a0);
-                    const [x3, y3] = gatePx(rO, a1);
-                    const [x4, y4] = gatePx(rI, a1);
-                    const p = paths[bi];
-                    p.moveTo(x1, y1); p.lineTo(x2, y2); p.lineTo(x3, y3); p.lineTo(x4, y4); p.closePath();
+                    buf[row + x] = colors[bi];
                 }
             }
-            for (let bi = 0; bi < paths.length; bi++) {
-                ctx.fillStyle = DBZ_STOPS[bi][1];
-                ctx.fill(paths[bi]);
-            }
+            ctx.putImageData(img, 0, 0);
             return { canvas, bounds };
         }
 
         function clearRadar() {
-            radarLayers.forEach(l => map.removeLayer(l));
+            radarLayers.forEach(l => {
+                map.removeLayer(l);
+                if (l._objUrl && l._objUrl.startsWith('blob:')) URL.revokeObjectURL(l._objUrl);
+            });
             radarLayers = [];
             radarTimes = [];
             currentFrame = 0;
         }
 
         // Locate a live site, then download + render the most recent volume scans.
+        // Frames appear progressively so the first scan shows quickly, and the whole
+        // pipeline runs off the main thread so the map stays interactive throughout.
         let radarLoading = false;
+        let radarLoadToken = 0;
         async function loadRadar() {
-            if (radarLoading) return;
+            const token = ++radarLoadToken; // invalidates any in-flight load (e.g. site switch)
             radarLoading = true;
             try {
                 radarStatus('Locating radar…');
-                const res = await resolveSite();
+                // Explicit user pick -> only that site. Auto/default -> fall back through the chain.
+                const candidates = userPicked ? [currentSite] : [currentSite, ...RADAR_FALLBACKS];
+                const res = await resolveSite(candidates);
+                if (token !== radarLoadToken) return;
                 if (!res) {
-                    radarStatus('No recent Level II data available.');
+                    clearRadar();
+                    document.getElementById('radar-site').innerText = currentSite;
+                    radarStatus(userPicked
+                        ? `No recent data for ${currentSite} (site may be offline).`
+                        : 'No recent Level II data available.');
                     return;
                 }
                 activeSite = res.site;
                 document.getElementById('radar-site').innerText =
-                    res.site + (res.site !== RADAR_SITE ? ` (${RADAR_SITE} offline)` : '');
+                    res.site + (res.site !== currentSite ? ` (${currentSite} offline)` : '');
 
                 const keys = res.keys.slice(-RADAR_FRAMES);
                 clearRadar();
-                const frames = [];
+                let count = 0;
                 for (const key of keys) {
-                    radarStatus(`Loading ${res.site} — scan ${frames.length + 1}/${keys.length}…`);
+                    radarStatus(`Loading ${res.site} — scan ${count + 1}/${keys.length}…`);
                     try {
                         const f = await loadFrame(key);
-                        frames.push(f);
-                        if (frames.length === 1) map.setView([f.siteLat, f.siteLon], 7);
+                        if (token !== radarLoadToken) { // superseded mid-load: discard this overlay
+                            map.removeLayer(f.overlay);
+                            if (f.overlay._objUrl && f.overlay._objUrl.startsWith('blob:')) URL.revokeObjectURL(f.overlay._objUrl);
+                            return;
+                        }
+                        // Publish progressively so animation can begin immediately.
+                        radarLayers.push(f.overlay);
+                        radarTimes.push(f.time);
+                        count++;
+                        if (count === 1) map.setView([f.siteLat, f.siteLon], 7);
                     } catch (e) {
                         console.error('frame decode error', key, e);
                     }
                 }
-                if (!frames.length) {
-                    radarStatus('Failed to decode radar volumes.');
-                    return;
-                }
-                radarLayers = frames.map(f => f.overlay);
-                radarTimes = frames.map(f => f.time);
-                currentFrame = 0;
-                radarStatus(`${res.site}: ${frames.length} scans loaded`);
+                if (token !== radarLoadToken) return;
+                if (!count) { radarStatus('Failed to decode radar volumes.'); return; }
+                radarStatus(`${res.site}: ${count} scan${count > 1 ? 's' : ''} loaded`);
             } catch (e) {
                 console.error('loadRadar error', e);
                 radarStatus('Radar error — see console.');
             } finally {
-                radarLoading = false;
+                if (token === radarLoadToken) radarLoading = false;
             }
         }
 
